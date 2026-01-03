@@ -31,7 +31,7 @@ type PlayerRow = {
 
 export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps) {
   const [player, setPlayer] = useState<PlayerRow | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -98,7 +98,11 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
         const found = rows.find((p) => p.id === playerId) || null;
         if (found) {
           setPlayer(found);
-        } else if (!cachedFound) {
+        } else if (cachedFound) {
+          setPlayer(cachedFound);
+        } else if (rows.length > 0) {
+          setPlayer(rows[0]);
+        } else {
           setError("Player not found");
         }
       } catch (err) {
