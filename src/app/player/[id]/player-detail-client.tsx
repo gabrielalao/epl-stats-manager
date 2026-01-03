@@ -100,10 +100,8 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
           setPlayer(found);
         } else if (cachedFound) {
           setPlayer(cachedFound);
-        } else if (rows.length > 0) {
-          setPlayer(rows[0]);
         } else {
-          setError("Player not found");
+          setError("Player not found for this season");
         }
       } catch (err) {
         if (cancelled) return;
