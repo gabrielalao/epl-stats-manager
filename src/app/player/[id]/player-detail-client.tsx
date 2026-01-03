@@ -50,49 +50,9 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
 
         let rows: PlayerRow[] = [];
         if (season === "current") {
-          type LivePayload = {
-            teams: Array<{ id: number; short_name: string }>;
-            elements: Array<{
-              id: number;
-              first_name: string;
-              second_name: string;
-              element_type: number;
-              team: number;
-              now_cost: number;
-              minutes: number;
-              total_points: number;
-              expected_goals?: number;
-              expected_assists?: number;
-              shots?: number;
-              key_passes?: number;
-              goals_scored: number;
-              assists: number;
-            }>;
-          };
-          const res = await fetch("/api/current", { cache: "no-store" });
-          if (!res.ok) throw new Error(`Current season fetch failed (${res.status})`);
-          const data = (await res.json()) as LivePayload;
-          const teamMap = new Map<number, string>(data.teams.map((t) => [t.id, t.short_name]));
-          rows = data.elements.map((e) => sanitizePlayer(mapElement(e, teamMap)));
+          rows = await fetchCurrentWithFallback();
         } else {
-          const playersUrl = `https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/${season}/players_raw.csv`;
-          const teamsUrl = `https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/${season}/teams.csv`;
-          const [playersRes, teamsRes] = await Promise.all([
-            fetch(playersUrl, { cache: "no-store", mode: "cors" }),
-            fetch(teamsUrl, { cache: "no-store", mode: "cors" }),
-          ]);
-          if (!playersRes.ok) throw new Error("Failed to fetch players");
-          if (!teamsRes.ok) throw new Error("Failed to fetch teams");
-          const playersCsv = await playersRes.text();
-          const teamsCsv = await teamsRes.text();
-          type TeamRow = { id: string; short_name?: string; name?: string };
-          const teamRows = parseCsv(teamsCsv) as TeamRow[];
-          const teamMap = new Map<number, string>(
-            teamRows.map((t) => [Number(t.id), t.short_name || t.name || `Team ${t.id}`])
-          );
-          type PlayerCsv = Record<string, string>;
-          const playerRows = parseCsv(playersCsv) as PlayerCsv[];
-          rows = playerRows.map((row) => sanitizePlayer(mapPlayerRow(row, teamMap)));
+          rows = await fetchSeasonCsv(season);
         }
         if (cancelled) return;
         const found = rows.find((p) => p.id === playerId) || null;
@@ -224,6 +184,60 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
       </section>
     </div>
   );
+}
+
+async function fetchCurrentWithFallback(): Promise<PlayerRow[]> {
+  // Try the server proxy; if it fails, fall back to latest CSV season (2023-24)
+  try {
+    type LivePayload = {
+      teams: Array<{ id: number; short_name: string }>;
+      elements: Array<{
+        id: number;
+        first_name: string;
+        second_name: string;
+        element_type: number;
+        team: number;
+        now_cost: number;
+        minutes: number;
+        total_points: number;
+        expected_goals?: number;
+        expected_assists?: number;
+        shots?: number;
+        key_passes?: number;
+        goals_scored: number;
+        assists: number;
+      }>;
+    };
+    const res = await fetch("/api/current", { cache: "no-store" });
+    if (!res.ok) throw new Error(`Current season fetch failed (${res.status})`);
+    const data = (await res.json()) as LivePayload;
+    const teamMap = new Map<number, string>(data.teams.map((t) => [t.id, t.short_name]));
+    return data.elements.map((e) => sanitizePlayer(mapElement(e, teamMap)));
+  } catch (err) {
+    console.warn("Current fetch failed, falling back to 2023-24 CSV", err);
+    return fetchSeasonCsv("2023-24");
+  }
+}
+
+async function fetchSeasonCsv(season: string): Promise<PlayerRow[]> {
+  const playersUrl = `https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/${season}/players_raw.csv`;
+  const teamsUrl = `https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/${season}/teams.csv`;
+  const [playersRes, teamsRes] = await Promise.all([
+    fetch(playersUrl, { cache: "no-store", mode: "cors" }),
+    fetch(teamsUrl, { cache: "no-store", mode: "cors" }),
+  ]);
+  if (!playersRes.ok) throw new Error(`Failed to fetch players for ${season}`);
+  if (!teamsRes.ok) throw new Error(`Failed to fetch teams for ${season}`);
+  const playersCsv = await playersRes.text();
+  const teamsCsv = await teamsRes.text();
+  type TeamRow = { id: string; short_name?: string; name?: string };
+  const teamRows = parseCsv(teamsCsv) as TeamRow[];
+  const teamMap = new Map<number, string>(
+    teamRows.map((t) => [Number(t.id), t.short_name || t.name || `Team ${t.id}`])
+  );
+  type PlayerCsv = Record<string, string>;
+  const playerRows = parseCsv(playersCsv) as PlayerCsv[];
+  return playerRows.map((row) => sanitizePlayer(mapPlayerRow(row, teamMap)));
 }
 
 function mapPlayerRow(row: Record<string, string>, teamMap: Map<number, string>): PlayerRow {
