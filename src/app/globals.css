@@ -282,6 +282,15 @@ h1 {
   font-weight: 700;
 }
 
+.note-list {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  display: grid;
+  gap: 4px;
+}
+
 .detail-grid .card {
   min-height: 110px;
 }

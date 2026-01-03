@@ -159,6 +159,8 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
     { label: "Price", value: `£${fmt(player.price, 1)}` },
   ];
 
+  const valuationScore = computeValuationScore(player);
+
   return (
     <div className="layout-single">
       <header className="hero-card">
@@ -197,6 +199,28 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
             <div className="card-value-lg">{m.value}</div>
           </div>
         ))}
+        <div className="card">
+          <div className="muted-sm">Valuation score (experimental)</div>
+          <div className="card-value-lg">{fmt(valuationScore)}</div>
+          <div className="muted-sm">
+            Based on per-90 output, price bucket, and minutes weight. Contract, age, club, and intl factors not available in this dataset.
+          </div>
+        </div>
+      </section>
+
+      <section className="card" style={{ marginTop: 12 }}>
+        <div className="muted-sm">Player valuation methodology (context)</div>
+        <ul className="note-list">
+          <li>Performance: raw and per-90 stats (points, xGI, goals/assists, minutes).</li>
+          <li>Age & position: younger players and attacking roles tend to carry higher value.</li>
+          <li>Contract: shorter remaining deals usually lower fees (data not available here).</li>
+          <li>Club/league: playing for top clubs/leagues increases value; this view lacks league/club strength data.</li>
+          <li>International: caps and performance impact value (not available in this feed).</li>
+          <li>Physical/athletic: PV-type indices using sprints/high-intensity distance (not available here).</li>
+        </ul>
+        <div className="muted-sm">
+          This page shows an experimental score driven by available match stats and price bucket; add the missing factors above when data becomes available for a fuller valuation.
+        </div>
       </section>
     </div>
   );
@@ -378,5 +402,17 @@ function round(n: number) {
 function fmt(n: number | undefined, digits = 2): string {
   if (typeof n !== "number" || !Number.isFinite(n)) return "—";
   return n.toFixed(digits);
+}
+
+function computeValuationScore(p: PlayerRow): number {
+  // Simple experimental score using available metrics; ranges roughly 0–10
+  const minutesWeight = Math.min(p.minutes / 1800, 1); // cap at ~20 games
+  const form = p.formScore ?? 0;
+  const value = p.value ?? 0;
+  const xgiPrice = p.xgiPerPrice ?? 0;
+  const bucketBonus =
+    p.priceBucket === "budget" ? 0.6 : p.priceBucket === "mid" ? 0.3 : 0; // budget gets a slight boost
+  const raw = 0.4 * form + 0.4 * value + 0.2 * xgiPrice + bucketBonus;
+  return round(raw * (0.7 + 0.3 * minutesWeight));
 }
 
