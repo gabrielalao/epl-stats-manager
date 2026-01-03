@@ -36,6 +36,7 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
 
   useEffect(() => {
     let cancelled = false;
+    let cachedFound: PlayerRow | null = null;
     async function load() {
       setLoading(true);
       setError(null);
@@ -43,9 +44,7 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
         // Optimistic: try cache first for instant render
         const cached = readCache(season);
         if (cached && !cancelled) {
-          const cachedFound = cached
-            .map(sanitizePlayer)
-            .find((p) => p.id === playerId);
+          cachedFound = cached.map(sanitizePlayer).find((p) => p.id === playerId) || null;
           if (cachedFound) setPlayer(cachedFound);
         }
 
@@ -97,8 +96,9 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
         }
         if (cancelled) return;
         const found = rows.find((p) => p.id === playerId) || null;
-        setPlayer(found);
-        if (!found) {
+        if (found) {
+          setPlayer(found);
+        } else if (!cachedFound) {
           setError("Player not found");
         }
       } catch (err) {
