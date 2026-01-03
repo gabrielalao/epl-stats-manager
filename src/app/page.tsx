@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Scope = "week" | "month" | "season";
@@ -20,6 +21,11 @@ type PlayerRow = {
   assistsPer90: number;
   minutes: number;
   value: number;
+  xgiPerPrice: number;
+  formScore: number;
+  priceBucket: "budget" | "mid" | "premium";
+  valueRank?: number;
+  valueBand?: "top" | "mid" | "low";
 };
 
 const positions = [
@@ -64,6 +70,8 @@ export default function Home() {
   const [gw, setGw] = useState<number>(0);
   const [position, setPosition] = useState<number>(3);
   const [minMinutes, setMinMinutes] = useState<number>(180);
+  const [priceCap, setPriceCap] = useState<number>(0);
+  const [team, setTeam] = useState<string>("all");
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({
     key: "value",
     dir: "desc",
@@ -126,7 +134,7 @@ export default function Home() {
         const teams = data.teams as Team[];
         const teamMap = new Map<number, string>(teams.map((t) => [t.id, t.short_name]));
         const elements = data.elements as Element[];
-        mapped = elements.map((e) => mapElement(e, teamMap));
+        mapped = elements.map((e) => sanitizePlayer(mapElement(e, teamMap)));
       } else {
         const playersUrl = `https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/${season}/players_raw.csv`;
         const teamsUrl = `https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/${season}/teams.csv`;
@@ -150,7 +158,7 @@ export default function Home() {
         type PlayerCsv = Record<string, string>;
         const playerRows = parseCsv(playersCsv) as PlayerCsv[];
 
-        mapped = playerRows.map((row) => mapPlayerRow(row, teamMap));
+        mapped = playerRows.map((row) => sanitizePlayer(mapPlayerRow(row, teamMap)));
       }
 
       if (!mounted.current) return;
@@ -175,7 +183,7 @@ export default function Home() {
     mounted.current = true;
     const cached = readCache(season);
     if (cached) {
-      setPlayers(cached.players);
+      setPlayers(cached.players.map(sanitizePlayer));
       setLastUpdated(new Date(cached.updated));
     }
     load(); // load once on mount and when season changes
@@ -184,12 +192,19 @@ export default function Home() {
     };
   }, [load, season]);
 
+  const uniqueTeams = useMemo(() => {
+    const names = Array.from(new Set(players.map((p) => p.teamName))).sort();
+    return names;
+  }, [players]);
+
   const derivedPlayers = useMemo(() => {
-    let data = [...players];
-    if (position) data = data.filter((p) => p.position === position);
-    if (minMinutes) data = data.filter((p) => p.minutes >= minMinutes);
-    return data;
-  }, [players, position, minMinutes]);
+    const rankMap = computeValueRank(players);
+    return players.map((p) => ({
+      ...p,
+      valueRank: rankMap.get(p.id),
+      valueBand: bandFromRank(rankMap.get(p.id), p.position, players),
+    }));
+  }, [players]);
 
   const filtered = useMemo(() => {
     const term = search.toLowerCase();
@@ -220,16 +235,20 @@ export default function Home() {
 
     return derivedPlayers
       .filter((p) => !term || p.name.toLowerCase().includes(term))
+      .filter((p) => (position ? p.position === position : true))
+      .filter((p) => (minMinutes ? p.minutes >= minMinutes : true))
+      .filter((p) => (priceCap ? p.price <= priceCap : true))
+      .filter((p) => (team === "all" ? true : p.teamName === team))
       .sort((a, b) => {
         const { key, dir } = sort;
         const delta = sortValue(a, key) > sortValue(b, key) ? 1 : -1;
         return dir === "asc" ? delta : -delta;
       });
-  }, [derivedPlayers, search, sort]);
+  }, [derivedPlayers, search, sort, position, minMinutes, priceCap, team]);
 
   const topByPosition = useMemo(() => {
     const grouped: Record<number, PlayerRow[]> = { 1: [], 2: [], 3: [], 4: [] };
-    players.forEach((p) => {
+    derivedPlayers.forEach((p) => {
       if (grouped[p.position]) grouped[p.position].push(p);
     });
     const result: Record<number, PlayerRow[]> = {};
@@ -239,7 +258,25 @@ export default function Home() {
         .slice(0, 5);
     });
     return result;
-  }, [players]);
+  }, [derivedPlayers]);
+
+  const bestAttackers = useMemo(
+    () =>
+      derivedPlayers
+        .filter((p) => p.position === 3 || p.position === 4)
+        .sort((a, b) => b.xgiPerPrice - a.xgiPerPrice)
+        .slice(0, 5),
+    [derivedPlayers]
+  );
+
+  const bestCreators = useMemo(
+    () =>
+      derivedPlayers
+        .filter((p) => p.position === 2 || p.position === 3)
+        .sort((a, b) => b.keyPassPer90 - a.keyPassPer90)
+        .slice(0, 5),
+    [derivedPlayers]
+  );
 
   const toggleSort = (key: SortKey) => {
     setSort((s) =>
@@ -248,24 +285,7 @@ export default function Home() {
   };
 
   return (
-    <main className="layout">
-      <aside className="sidebar">
-        <h2 className="sidebar-title">Positions</h2>
-        <div className="sidebar-list">
-          {positions
-            .filter((p) => p.id !== 0)
-            .map((p) => (
-              <button
-                key={p.id}
-                className={`sidebar-item ${position === p.id ? "active" : ""}`}
-                onClick={() => setPosition(p.id)}
-              >
-                {p.label}
-              </button>
-            ))}
-        </div>
-      </aside>
-
+    <main className="layout-single">
       <div className="content space-y-4">
         <header className="space-y-2">
           <h1 className="text-2xl font-semibold">EPL Per-90 Value Dashboard</h1>
@@ -302,11 +322,11 @@ export default function Home() {
                             {idx + 1}. {p.name}
                           </div>
                           <div className="muted-sm">
-                            {p.teamName} · {p.minutes} mins · £{p.price.toFixed(1)}
+                            {p.teamName} · {p.minutes} mins · £{fmt(p.price, 1)}
                           </div>
                         </div>
                         <div className="card-metric">
-                          <div className="card-value">{p.value.toFixed(2)}</div>
+                          <div className="card-value">{fmt(p.value)}</div>
                           <div className="muted-sm">pts/£</div>
                         </div>
                       </div>
@@ -315,6 +335,54 @@ export default function Home() {
                 </div>
               );
             })}
+            <div className="card">
+              <div className="card-head">
+                <span className="badge">Attackers</span>
+                <span className="muted-sm">Best xGI/£ (FWD+MID)</span>
+              </div>
+              <div className="card-list">
+                {bestAttackers.map((p, idx) => (
+                  <div key={p.id} className="card-row">
+                    <div>
+                      <div className="card-name">
+                        {idx + 1}. {p.name}
+                      </div>
+                      <div className="muted-sm">
+                        {p.teamName} · £{fmt(p.price, 1)}
+                      </div>
+                    </div>
+                    <div className="card-metric">
+                      <div className="card-value">{fmt(p.xgiPerPrice)}</div>
+                      <div className="muted-sm">xGI/£</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="card">
+              <div className="card-head">
+                <span className="badge">Creators</span>
+                <span className="muted-sm">Key passes/90 (DEF+MID)</span>
+              </div>
+              <div className="card-list">
+                {bestCreators.map((p, idx) => (
+                  <div key={p.id} className="card-row">
+                    <div>
+                      <div className="card-name">
+                        {idx + 1}. {p.name}
+                      </div>
+                      <div className="muted-sm">
+                        {p.teamName} · £{fmt(p.price, 1)}
+                      </div>
+                    </div>
+                    <div className="card-metric">
+                      <div className="card-value">{fmt(p.keyPassPer90)}</div>
+                      <div className="muted-sm">KP/90</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
         </div>
 
           <div className="filters">
@@ -336,6 +404,18 @@ export default function Home() {
                 {seasons.map((s) => (
                   <option key={s} value={s}>
                     {s === "current" ? "Current Season" : s}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Team
+              <select value={team} onChange={(e) => setTeam(e.target.value)}>
+                <option value="all">All teams</option>
+                {uniqueTeams.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
                   </option>
                 ))}
               </select>
@@ -374,6 +454,17 @@ export default function Home() {
               />
             </label>
 
+            <label>
+              Price ≤
+              <input
+                type="number"
+                value={priceCap || ""}
+                onChange={(e) => setPriceCap(Number(e.target.value) || 0)}
+                min={0}
+                step={0.1}
+              />
+            </label>
+
             <label className="grow">
               Search
               <input
@@ -383,6 +474,16 @@ export default function Home() {
                 onChange={(e) => setSearch(e.target.value)}
               />
             </label>
+
+            <button className="pill pill-ghost" onClick={() => {
+              setPosition(0);
+              setTeam("all");
+              setPriceCap(0);
+              setMinMinutes(180);
+              setSearch("");
+            }}>
+              Clear filters
+            </button>
           </div>
         </header>
 
@@ -403,18 +504,26 @@ export default function Home() {
             </thead>
             <tbody>
               {filtered.map((p) => (
-                <tr key={`${p.id}-${p.gw}`}>
-                  <td>{p.name}</td>
+                <tr key={`${p.id}-${p.gw}`} className={p.valueBand ? `band-${p.valueBand}` : ""}>
+                  <td>
+                    <div className="row-main">
+                      <Link href={`/player/${p.id}?season=${season}`} className="link-plain">
+                        {p.name}
+                      </Link>
+                      <span className={`chip chip-${p.priceBucket}`}>{p.priceBucket}</span>
+                    </div>
+                    <div className="muted-sm">Form: {fmt(p.formScore)}</div>
+                  </td>
                   <td>{p.teamName}</td>
-                  <td>{p.value.toFixed(2)}</td>
-                  <td>{p.pointsPer90.toFixed(2)}</td>
-                  <td>{p.xgiPer90.toFixed(2)}</td>
-                  <td>{p.goalsPer90.toFixed(2)}</td>
-                  <td>{p.assistsPer90.toFixed(2)}</td>
-                  <td>{p.shotsPer90.toFixed(2)}</td>
-                  <td>{p.keyPassPer90.toFixed(2)}</td>
+                  <td>{fmt(p.value)}</td>
+                  <td>{fmt(p.pointsPer90)}</td>
+                  <td>{fmt(p.xgiPer90)}</td>
+                  <td>{fmt(p.goalsPer90)}</td>
+                  <td>{fmt(p.assistsPer90)}</td>
+                  <td>{fmt(p.shotsPer90)}</td>
+                  <td>{fmt(p.keyPassPer90)}</td>
                   <td>{p.minutes}</td>
-                  <td>{p.price.toFixed(1)}</td>
+                  <td>{fmt(p.price, 1)}</td>
                 </tr>
               ))}
             </tbody>
@@ -465,6 +574,9 @@ function mapPlayerRow(row: Record<string, string>, teamMap: Map<number, string>)
     assistsPer90,
     minutes,
     value,
+    xgiPerPrice: price ? round(xgiPer90 / price) : 0,
+    formScore: round(0.6 * pointsPer90 + 0.4 * xgiPer90),
+    priceBucket: priceBucket(price),
   };
 }
 
@@ -513,6 +625,22 @@ function mapElement(
     assistsPer90,
     minutes,
     value,
+    xgiPerPrice: price ? round(xgiPer90 / price) : 0,
+    formScore: round(0.6 * pointsPer90 + 0.4 * xgiPer90),
+    priceBucket: priceBucket(price),
+  };
+}
+
+function sanitizePlayer(p: PlayerRow): PlayerRow {
+  const price = p.price ?? 0;
+  const xgiPerPrice = p.xgiPerPrice ?? (price ? round(p.xgiPer90 / price) : 0);
+  const formScore = p.formScore ?? round(0.6 * p.pointsPer90 + 0.4 * p.xgiPer90);
+  const priceBucketValue = p.priceBucket ?? priceBucket(price);
+  return {
+    ...p,
+    xgiPerPrice,
+    formScore,
+    priceBucket: priceBucketValue,
   };
 }
 
@@ -592,4 +720,43 @@ function clearCache(season: string) {
 
 function round(n: number) {
   return Math.round(n * 100) / 100;
+}
+
+function fmt(n: number | undefined, digits = 2): string {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return n.toFixed(digits);
+}
+
+function priceBucket(price: number): "budget" | "mid" | "premium" {
+  if (price <= 5.5) return "budget";
+  if (price <= 7.5) return "mid";
+  return "premium";
+}
+
+function computeValueRank(players: PlayerRow[]): Map<number, number> {
+  const byPos = new Map<number, PlayerRow[]>();
+  players.forEach((p) => {
+    const arr = byPos.get(p.position) ?? [];
+    arr.push(p);
+    byPos.set(p.position, arr);
+  });
+  const rankMap = new Map<number, number>();
+  byPos.forEach((arr) => {
+    arr
+      .slice()
+      .sort((a, b) => b.value - a.value)
+      .forEach((p, idx) => {
+        rankMap.set(p.id, idx + 1);
+      });
+  });
+  return rankMap;
+}
+
+function bandFromRank(rank: number | undefined, pos: number, players: PlayerRow[]): "top" | "mid" | "low" | undefined {
+  if (!rank) return undefined;
+  const total = players.filter((p) => p.position === pos).length || 1;
+  const pct = rank / total;
+  if (pct <= 0.33) return "top";
+  if (pct <= 0.66) return "mid";
+  return "low";
 }
