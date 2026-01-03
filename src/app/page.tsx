@@ -79,19 +79,6 @@ export default function Home() {
       let mapped: PlayerRow[] = [];
 
       if (season === "current") {
-        const liveUrl = "https://fantasy.premierleague.com/api/bootstrap-static/";
-        const proxies = [
-          liveUrl,
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(liveUrl)}`,
-          `https://cors.isomorphic-git.org/${liveUrl}`,
-        ];
-
-        const fetchJson = async (url: string) => {
-          const r = await fetch(url, { cache: "no-store", mode: "cors" });
-          if (!r.ok) throw new Error(`Fetch failed (${r.status})`);
-          return r.json();
-        };
-
         type LivePayload = {
           teams: Array<{ id: number; short_name: string }>;
           elements: Array<{
@@ -112,19 +99,12 @@ export default function Home() {
           }>;
         };
 
-        let data: LivePayload | null = null;
-        const errors: string[] = [];
-        for (const url of proxies) {
-          try {
-            data = await fetchJson(url);
-            break;
-          } catch (err) {
-            errors.push(err instanceof Error ? err.message : String(err));
-          }
+        const res = await fetch("/api/current", { cache: "no-store" });
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(`Current season fetch failed (${res.status}): ${msg}`);
         }
-        if (!data) {
-          throw new Error(`Failed to fetch current season data. Tried: ${errors.join(" | ")}`);
-        }
+        const data = (await res.json()) as LivePayload;
 
         type Team = { id: number; short_name: string };
         type Element = {

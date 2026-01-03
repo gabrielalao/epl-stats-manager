@@ -36,7 +36,12 @@ type PlayerSummary = {
 type Bootstrap = {
   events: Event[];
   elements: PlayerElement[];
-  teams: Team[];
+  teams: {
+    id: number;
+    name: string;
+    short_name: string;
+    strength: number;
+  }[];
 };
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";

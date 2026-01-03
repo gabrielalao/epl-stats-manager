@@ -18,21 +18,26 @@ export async function GET(req: Request) {
     (n) => n > 0
   );
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("player_gameweek_stats_per90")
     .select(
       "player_id, gw, points_per90, xgi_per90, shots_per90, key_passes_per90, goals_per90, assists_per90, minutes"
     )
-    .gte("minutes", minMinutes)
-    .in("gw", gwFilter ?? (scope === "season" ? undefined : [gw]))
-    .order("points_per90", { ascending: false });
+    .gte("minutes", minMinutes);
+
+  if (gwFilter && gwFilter.length) {
+    query = query.in("gw", gwFilter);
+  } else if (scope !== "season" && gw) {
+    query = query.in("gw", [gw]);
+  }
+
+  const { data, error } = await query.order("points_per90", { ascending: false });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
   const playerIds = [...new Set((data ?? []).map((r) => r.player_id))];
-  const teamIds = [...new Set((data ?? []).map((r) => r.team_id ?? null).filter(Boolean))];
   const { data: players, error: playersError } = await supabase
     .from("players")
     .select("id, first_name, second_name, position, team_id, now_cost")
@@ -41,8 +46,6 @@ export async function GET(req: Request) {
   if (playersError) {
     return NextResponse.json({ error: playersError.message }, { status: 500 });
   }
-
-  const { data: teams } = await supabase.from("teams").select("id, name, short_name").in("id", teamIds);
 
   const filtered = position
     ? players?.filter((p) => p.position === position).map((p) => p.id) ?? []
@@ -53,7 +56,7 @@ export async function GET(req: Request) {
     .map((r) => {
       const meta = players?.find((p) => p.id === r.player_id);
       const price = (meta?.now_cost ?? 0) / 10;
-      const teamName = teams?.find((t) => t.id === meta?.team_id)?.short_name ?? `Team ${meta?.team_id ?? ""}`;
+      const teamName = `Team ${meta?.team_id ?? ""}`;
       return {
         id: r.player_id,
         name: meta ? `${meta.first_name} ${meta.second_name}` : `#${r.player_id}`,
