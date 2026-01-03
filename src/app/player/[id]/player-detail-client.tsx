@@ -187,7 +187,7 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
 }
 
 async function fetchCurrentWithFallback(): Promise<PlayerRow[]> {
-  // Try the server proxy; if it fails, fall back to latest CSV season (2023-24)
+  // Try server proxy; if it fails, try direct FPL, then fall back to latest CSV season (2023-24)
   try {
     type LivePayload = {
       teams: Array<{ id: number; short_name: string }>;
@@ -208,9 +208,26 @@ async function fetchCurrentWithFallback(): Promise<PlayerRow[]> {
         assists: number;
       }>;
     };
-    const res = await fetch("/api/current", { cache: "no-store" });
-    if (!res.ok) throw new Error(`Current season fetch failed (${res.status})`);
-    const data = (await res.json()) as LivePayload;
+    const urls = [
+      "/api/current",
+      "https://fantasy.premierleague.com/api/bootstrap-static/",
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(
+        "https://fantasy.premierleague.com/api/bootstrap-static/"
+      )}`,
+    ];
+    let data: LivePayload | null = null;
+    const errors: string[] = [];
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
+        data = (await res.json()) as LivePayload;
+        break;
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    if (!data) throw new Error(errors.join(" | "));
     const teamMap = new Map<number, string>(data.teams.map((t) => [t.id, t.short_name]));
     return data.elements.map((e) => sanitizePlayer(mapElement(e, teamMap)));
   } catch (err) {
