@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { PlayerDetailClient, type PlayerDetailClientProps } from "./player-detail-client";
 
 type Props = {
