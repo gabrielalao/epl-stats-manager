@@ -33,6 +33,7 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
   const [player, setPlayer] = useState<PlayerRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fallbackNote, setFallbackNote] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +41,7 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
     async function load() {
       setLoading(true);
       setError(null);
+      setFallbackNote(null);
       try {
         // Optimistic: try cache first for instant render
         const cached = readCache(season);
@@ -50,9 +52,13 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
 
         let rows: PlayerRow[] = [];
         if (season === "current") {
-          rows = await fetchCurrentWithFallback();
+          const { rows: fetched, note } = await fetchCurrentWithFallback();
+          rows = fetched;
+          if (note && !cancelled) setFallbackNote(note);
         } else {
-          rows = await fetchSeasonCsv(season);
+          const { rows: fetched, note } = await fetchSeasonCsv(season);
+          rows = fetched;
+          if (note && !cancelled) setFallbackNote(note);
         }
         if (cancelled) return;
         const found = rows.find((p) => p.id === playerId) || null;
@@ -131,6 +137,7 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
             </Link>
             <span className="badge">Season: {season === "current" ? "Current" : season}</span>
           </div>
+          {fallbackNote && <div className="muted-sm">{fallbackNote}</div>}
           <div className="hero-body">
             <div>
               <div className="muted-sm">Position {player.position}</div>
@@ -186,8 +193,8 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
   );
 }
 
-async function fetchCurrentWithFallback(): Promise<PlayerRow[]> {
-  // Try server proxy; if it fails, try direct FPL, then fall back to latest CSV season (2023-24)
+async function fetchCurrentWithFallback(): Promise<{ rows: PlayerRow[]; note?: string }> {
+  // Try server proxy; if it fails, try direct FPL/proxy, then fall back to latest CSV season(s)
   try {
     type LivePayload = {
       teams: Array<{ id: number; short_name: string }>;
@@ -229,14 +236,23 @@ async function fetchCurrentWithFallback(): Promise<PlayerRow[]> {
     }
     if (!data) throw new Error(errors.join(" | "));
     const teamMap = new Map<number, string>(data.teams.map((t) => [t.id, t.short_name]));
-    return data.elements.map((e) => sanitizePlayer(mapElement(e, teamMap)));
+    return { rows: data.elements.map((e) => sanitizePlayer(mapElement(e, teamMap))) };
   } catch (err) {
-    console.warn("Current fetch failed, falling back to 2023-24 CSV", err);
-    return fetchSeasonCsv("2023-24");
+    console.warn("Current fetch failed, falling back to CSV seasons", err);
+    const fallbackSeasons = ["2024-25", "2023-24"];
+    for (const s of fallbackSeasons) {
+      try {
+        const res = await fetchSeasonCsv(s);
+        return { rows: res.rows, note: `Using fallback season ${s}` };
+      } catch (innerErr) {
+        console.warn(`Fallback season ${s} failed`, innerErr);
+      }
+    }
+    return { rows: [], note: "No fallback season data available" };
   }
 }
 
-async function fetchSeasonCsv(season: string): Promise<PlayerRow[]> {
+async function fetchSeasonCsv(season: string): Promise<{ rows: PlayerRow[]; note?: string }> {
   const playersUrl = `https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/${season}/players_raw.csv`;
   const teamsUrl = `https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/${season}/teams.csv`;
   const [playersRes, teamsRes] = await Promise.all([
@@ -254,7 +270,7 @@ async function fetchSeasonCsv(season: string): Promise<PlayerRow[]> {
   );
   type PlayerCsv = Record<string, string>;
   const playerRows = parseCsv(playersCsv) as PlayerCsv[];
-  return playerRows.map((row) => sanitizePlayer(mapPlayerRow(row, teamMap)));
+  return { rows: playerRows.map((row) => sanitizePlayer(mapPlayerRow(row, teamMap))) };
 }
 
 function mapPlayerRow(row: Record<string, string>, teamMap: Map<number, string>): PlayerRow {
