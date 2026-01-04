@@ -44,8 +44,9 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
       setFallbackNote(null);
       try {
         // Optimistic: try cache first for instant render
-        const cached = readCache(season);
-        if (cached && !cancelled) {
+        const cachedRaw = readCache(season);
+        const cached = Array.isArray(cachedRaw) ? cachedRaw : [];
+        if (cached.length && !cancelled) {
           cachedFound = cached.map(sanitizePlayer).find((p) => p.id === playerId) || null;
           if (cachedFound) setPlayer(cachedFound);
         }
@@ -53,11 +54,11 @@ export function PlayerDetailClient({ playerId, season }: PlayerDetailClientProps
         let rows: PlayerRow[] = [];
         if (season === "current") {
           const { rows: fetched, note } = await fetchCurrentWithFallback();
-          rows = fetched;
+          rows = Array.isArray(fetched) ? fetched : [];
           if (note && !cancelled) setFallbackNote(note);
         } else {
           const { rows: fetched, note } = await fetchSeasonCsv(season);
-          rows = fetched;
+          rows = Array.isArray(fetched) ? fetched : [];
           if (note && !cancelled) setFallbackNote(note);
         }
         if (cancelled) return;
